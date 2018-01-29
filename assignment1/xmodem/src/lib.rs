@@ -38,6 +38,7 @@ impl Xmodem<()> {
                 return Ok(written);
             }
 
+//            println!("+++++++++++++++++++++++");
             for _ in 0..10 {
                 match transmitter.write_packet(&packet) {
                     Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -165,45 +166,64 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
     pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.len() < 128 {
-            return  Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Invalid buffer length"));
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Invalid buffer length"));
         }
-        self.write_byte(NAK)?;
-        for _ in 0 .. 10 {
-            match self.read_byte() {
-                Ok(SOH) => {
-                    let packet = self.packet;
-                    if let Err(e) = self.expect_byte_or_cancel(packet, "packet number mismatch") {
-                        return Err(e);
-                    }
-                    if let Err(e) = self.expect_byte_or_cancel(255 - packet, "1s completement packet number mismatch") {
-                        return Err(e);
-                    }
-                    let mut checksum = 0;
-                    for i in 0..128 {
-                        if let Ok(b) = self.read_byte() {
-                            buf[i] = b;
-                            checksum += b;
-                        }
-                    }
-                    if let Ok(_) = self.expect_byte(checksum, "checksum mismatch") {
-                        self.write_byte(ACK)?;
-                        self.expect_byte(EOT, "Expect EOT")?;
-                        break;
+        if !self.started {
+            self.write_byte(NAK)?;
+            self.started = true;
+        }
+//        println!("enter read_packet");
+        match self.read_byte() {
+            Ok(SOH) => {
+                let mut recved = 0;
+                let packet = self.packet;
+                if let Err(e) = self.expect_byte_or_cancel(packet, "packet number mismatch") {
+                    return Err(e);
+                }
+                if let Err(e) = self.expect_byte_or_cancel(255 - packet, "1s completement packet number mismatch") {
+                    return Err(e);
+                }
+                let mut checksum = 0u16;
+                for i in 0..buf.len() {
+                    if let Ok(b) = self.read_byte() {
+                        buf[i] = b;
                     } else {
+                        buf[i] = CAN;
+                    }
+                    checksum += (buf[i] as u16) % 256;
+                    recved += 1;
+//                    println!("{}: got byte {}, checksum {}", i, buf[i], checksum);
+                }
+                let checksum = (checksum % 256) as u8;
+//                println!("expecting checksum {}", checksum);
+                match self.expect_byte(checksum, "checksum mismatch") {
+                    Ok(_) => {
+//                        println!("sending ack");
+                        self.write_byte(ACK)?;
+                        self.packet += 1;
+                        Ok(recved)
+                    }
+                    _ => {
+//                        println!("sending nack");
                         self.write_byte(NAK)?;
+                        Err(io::Error::new(io::ErrorKind::Interrupted, 
+                                               "checksum mismatch"))
                     }
                 }
-                Ok(EOT) => break,
-                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, 
-                                               "Neither SOH nor EOT received"))
             }
+            Ok(EOT) => {
+//                println!("got EOT");
+                self.write_byte(NAK)?;
+                if let Err(e) = self.expect_byte(EOT, "expect EOT") {
+                    return Err(e);
+                }
+                self.write_byte(ACK)?;
+                self.started = false;
+                Ok(0)
+            }
+            b => return Err(io::Error::new(io::ErrorKind::InvalidData, 
+                                           format!("Neither SOH nor EOT received, got {:?}", b)))
         }
-        self.write_byte(NAK)?;
-        if let Err(e) = self.expect_byte(EOT, "expect EOT") {
-            return Err(e);
-        }
-        self.write_byte(ACK)?;
-        Ok(buf.len())
     }
 
     /// Sends (uploads) a single packet to the inner stream using the XMODEM
@@ -231,46 +251,53 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
         match buf.len() {
             0 => {
+//                println!("sending EOT");
                 self.write_byte(EOT)?;
                 if let Err(e) = self.expect_byte(NAK, "Expect NAK") {
                     return Err(e);
                 }
+                self.write_byte(EOT)?;
                 if let Err(e) = self.expect_byte(ACK, "Expect ACK") {
                     return Err(e);
                 }
+                self.started = false;
                 Ok(0)
             } 
             128 => {
-                if let Err(e) = self.expect_byte(NAK, "Expect NAK") {
-                    return Err(e);
+                if !self.started {
+                    if let Err(e) = self.expect_byte(NAK, "Expect NAK") {
+                        return Err(e);
+                    }
+                    self.started = true;
                 }
-                'retry: for _ in 0..10 {
-                    let packet = self.packet;
-                    let mut sent = 0;
+                let packet = self.packet;
+                let mut sent = 0;
 
-                    self.write_byte(SOH)?;
-                    self.write_byte(packet)?;
-                    self.write_byte(255 - packet)?;
+//                println!("sending SOH");
+                self.write_byte(SOH)?;
+                self.write_byte(packet)?;
+                self.write_byte(255 - packet)?;
 
-                    let mut checksum = 0;
-                    for i in 0..buf.len() {
-                        sent += 1;
-                        checksum += buf[i];
-                        self.write_byte(buf[i])?;
-                    };
-                    self.write_byte(checksum)?;
+                let mut checksum = 0u16;
+                for i in 0..buf.len() {
+                    sent += 1;
+                    checksum += (buf[i] as u16) % 256;
+                    self.write_byte(buf[i])?;
+//                    println!("{} send byte {}, checksum {}", i, buf[i], checksum);
+                }
+                let checksum = (checksum % 256) as u8;
+//                println!("start sending checksum {}", checksum);
+                self.write_byte(checksum)?;
+//                println!("finished sending checksum");
 
-                    match self.read_byte() {
-                        Ok(ACK) => (),
-                        Ok(NAK) => continue,
-                        Err(e) => return Err(e),
-                        Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, 
-                                                           "Neither ACK nor NACK received"))
-                    };
-
-                    return Ok(sent);
-                };
-                Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Retry timeout"))
+                match self.read_byte() {
+                    Ok(ACK) => {self.packet += 1; return Ok(sent)},
+                    Ok(NAK) => Err(io::Error::new(io::ErrorKind::Interrupted, 
+                                           "checksum mismatch")),
+                    Err(e) => Err(e),
+                    Ok(_) => Err(io::Error::new(io::ErrorKind::InvalidData, 
+                                                       "Neither ACK nor NACK received"))
+                }
             }
             _ => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Invalid buffer length"))
         }
