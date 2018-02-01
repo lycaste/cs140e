@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use structopt::StructOpt;
 use serial::core::{CharSize, BaudRate, StopBits, FlowControl, SerialDevice, SerialPortSettings};
+use serial::prelude::*;
 use xmodem::Xmodem;
+use std::io::{Read, Write};
 
 mod parsers;
 
@@ -47,12 +49,48 @@ struct Opt {
     raw: bool,
 }
 
+fn xmodem_send<I: Read, O: Write>(mut input: I, mut output: O)
+    -> Result<u64, std::io::Error>
+{
+    Ok(128)
+}
+
+use std::io::{BufReader, BufRead};
+fn t<I: BufRead>(mut input: I, mut serial: &mut serial::SerialPort, raw: bool)
+    -> Result<u64, std::io::Error> {
+    match raw {
+        true => std::io::copy(&mut input, &mut serial),
+        false => xmodem_send(input, serial)
+    }
+}
+
 fn main() {
     use std::fs::File;
-    use std::io::{self, BufReader, BufRead};
 
     let opt = Opt::from_args();
-    let mut serial = serial::open(&opt.tty_path).expect("path points to invalid TTY");
 
-    // FIXME: Implement the `ttywrite` utility.
+    let mut serial = serial::open(&opt.tty_path)
+        .expect("path points to invalid TTY");
+
+    serial.reconfigure(&|settings| {
+        settings.set_baud_rate(opt.baud_rate)?;
+        settings.set_char_size(opt.char_width);
+        settings.set_stop_bits(opt.stop_bits);
+        settings.set_flow_control(opt.flow_control);
+        Ok(())
+    }).expect("configure serial failed");
+    serial::SerialPort::set_timeout(&mut serial, 
+                                    Duration::from_millis(opt.timeout))
+        .expect("configure timeout failed");
+
+    let sent = match opt.input {
+        Some(f) => {
+            t(BufReader::new(File::open(f).expect("file open failed")), &mut serial, opt.raw)
+        },
+        None => t(BufReader::new(std::io::stdin()), &mut serial, opt.raw)
+    };
+    if let Ok(n) = sent {
+        println!("wrote {} bytes to input", n);
+    
+    }
 }

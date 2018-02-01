@@ -104,6 +104,7 @@ fn test_small_packet_eof_error() {
 fn test_eot() {
     let mut buffer = vec![NAK, 0, NAK, 0, ACK];
     Xmodem::new(Cursor::new(buffer.as_mut_slice()))
+//    Xmodem::new(Cursor::new(&mut buffer))
         .write_packet(&[])
         .expect("write empty buf for EOT");
 
