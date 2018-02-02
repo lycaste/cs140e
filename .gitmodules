@@ -1,0 +1,9 @@
+[submodule "1-shell"]
+	path = 1-shell
+	url = https://github.com/vincenthouyi/cs140e-1-shell
+[submodule "0-blinky"]
+	path = 0-blinky
+	url = https://github.com/vincenthouyi/cs140e-0-blinky
+[submodule "os"]
+	path = os
+	url = https://github.com/vincenthouyi/cs140e-os
