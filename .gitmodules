@@ -7,3 +7,6 @@
 [submodule "os"]
 	path = os
 	url = https://github.com/vincenthouyi/cs140e-os
+[submodule "2-fs"]
+	path = 2-fs
+	url = ./2-fs
