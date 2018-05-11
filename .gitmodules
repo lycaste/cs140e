@@ -10,3 +10,6 @@
 [submodule "2-fs"]
 	path = 2-fs
 	url = ./2-fs
+[submodule "3-spawn"]
+	path = 3-spawn
+	url = ./3-spawn
